@@ -127,6 +127,9 @@
   .topic-tag.sci{background:var(--sci-soft);color:var(--sci);}
   .topic-tag.review{background:var(--bad-soft);color:var(--bad);}
   .progress-label{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-faint);white-space:nowrap;}
+  .qmeta-right{display:flex;align-items:center;gap:12px;}
+  .timer{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--ink-soft);font-variant-numeric:tabular-nums;white-space:nowrap;min-width:42px;text-align:right;}
+  .speed-line{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--ink-soft);margin-bottom:14px;font-variant-numeric:tabular-nums;}
 
   .card{background:var(--surface);border-radius:var(--radius-lg);padding:30px 30px 26px;box-shadow:var(--shadow);position:relative;overflow:hidden;animation:cardIn .2s ease both;}
   @keyframes cardIn{from{opacity:0;transform:translateY(7px);}to{opacity:1;transform:none;}}
@@ -354,6 +357,11 @@ let state = {
   stepReveal: 0,
   selfMarked: false,
   lastMarkRight: false,
+  qStart: 0,          // performance.now() when the current question appeared
+  qElapsed: null,     // frozen ms once the question is answered/marked
+  timedFor: -1,       // which queue index the timer was started for
+  timerId: null,      // live-tick interval handle
+  times: [],          // seconds taken per question this session
   // persisted:
   scores: { math:{correct:0,attempted:0}, science:{correct:0,attempted:0} },
   wrong: {},          // { [questionId]: true } — questions to review
@@ -457,7 +465,10 @@ function ring(p, color){
 }
 
 /* ---------- render ---------- */
+function fmtTime(ms){ return (ms/1000).toFixed(1) + 's'; }
+
 function render(){
+  clearInterval(state.timerId);   // stop any live timer; renderQuestion restarts it if needed
   const app = document.getElementById('app');
   if(!state.mode){
     renderHome(app);
@@ -569,6 +580,9 @@ function beginQueue(queue, mode){
   state.answered = false;
   state.chosen = null;
   state.orderFor = -1;
+  state.times = [];
+  state.timedFor = -1;
+  state.qElapsed = null;
   state.hintShown = false;
   state.stepReveal = 0;
   state.selfMarked = false;
@@ -585,6 +599,13 @@ function renderQuestion(app){
   if(q.type==='quiz' && state.orderFor !== state.index){
     state.order = shuffle(q.opts.map((_,i)=>i));
     state.orderFor = state.index;
+  }
+
+  // start the stopwatch once per question
+  if(state.timedFor !== state.index){
+    state.qStart = performance.now();
+    state.qElapsed = null;
+    state.timedFor = state.index;
   }
 
   const subj = subjectOf(q);
@@ -647,7 +668,10 @@ function renderQuestion(app){
     </div>
     <div class="qmeta">
       <span class="topic-tag ${modeTag}">${subj} · ${q.topic}</span>
-      <span class="progress-label">${String(state.index+1).padStart(2,'0')} / ${String(state.queue.length).padStart(2,'0')}</span>
+      <span class="qmeta-right">
+        <span class="timer" id="timer">0.0s</span>
+        <span class="progress-label">${String(state.index+1).padStart(2,'0')} / ${String(state.queue.length).padStart(2,'0')}</span>
+      </span>
     </div>
     <div class="card ${tagClass}">${inner}</div>
     <div class="footer-nav">
@@ -676,6 +700,7 @@ function renderQuestion(app){
           const i = parseInt(btn.dataset.i);
           state.answered = true;
           state.chosen = i;
+          stopTimer();
           recordResult(subj, q.id, i===q.correct);
           render();   // re-render: colours the options + shows explanation + enables Next
         };
@@ -691,21 +716,48 @@ function renderQuestion(app){
     const right = document.getElementById('mark-right');
     if(right) right.onclick = ()=>{
       state.selfMarked = true; state.lastMarkRight = true;
+      stopTimer();
       recordResult(subj, q.id, true);
       render();
     };
     const wrong = document.getElementById('mark-wrong');
     if(wrong) wrong.onclick = ()=>{
       state.selfMarked = true; state.lastMarkRight = false;
+      stopTimer();
       recordResult(subj, q.id, false);
       render();
     };
+  }
+
+  // stopwatch: freeze when done, otherwise tick live
+  const isDone = q.type==='quiz' ? state.answered : state.selfMarked;
+  const timerEl = document.getElementById('timer');
+  if(timerEl){
+    if(isDone){
+      timerEl.textContent = fmtTime(state.qElapsed != null ? state.qElapsed : (performance.now() - state.qStart));
+    } else {
+      const tick = ()=>{ const el = document.getElementById('timer'); if(el) el.textContent = fmtTime(performance.now() - state.qStart); };
+      tick();
+      state.timerId = setInterval(tick, 100);
+    }
+  }
+}
+
+function stopTimer(){
+  clearInterval(state.timerId);
+  if(state.qElapsed == null){
+    state.qElapsed = performance.now() - state.qStart;
+    state.times.push(state.qElapsed / 1000);
   }
 }
 
 function renderSessionEnd(app){
   const done = state.queue.length;
   const isReview = state.mode==='review';
+  const t = state.times;
+  const speed = t.length
+    ? `⏱ ${(t.reduce((a,b)=>a+b,0)/t.length).toFixed(1)}s average · fastest ${Math.min(...t).toFixed(1)}s`
+    : '';
   app.innerHTML = `
     <div class="topbar">
       <div class="brand">
@@ -720,6 +772,7 @@ function renderSessionEnd(app){
       <div class="empty-state">
         <div class="score-big">${done} done</div>
         <h2>${isReview ? 'Mistakes reviewed' : 'Nice work'}</h2>
+        ${speed ? `<div class="speed-line">${speed}</div>` : ''}
         <p>${isReview
           ? 'Anything you got right just now cleared out of your review list. What\'s left still needs another pass.'
           : 'Your progress and streak are saved. Come back tomorrow to keep the streak alive.'}</p>
