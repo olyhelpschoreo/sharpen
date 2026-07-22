@@ -348,6 +348,8 @@ let state = {
   index: 0,
   answered: false,
   chosen: null,
+  order: null,      // shuffled display order of the current quiz's options
+  orderFor: -1,     // which queue index `order` was shuffled for
   hintShown: false,
   stepReveal: 0,
   selfMarked: false,
@@ -566,6 +568,7 @@ function beginQueue(queue, mode){
   state.index = 0;
   state.answered = false;
   state.chosen = null;
+  state.orderFor = -1;
   state.hintShown = false;
   state.stepReveal = 0;
   state.selfMarked = false;
@@ -578,6 +581,12 @@ function renderQuestion(app){
   const q = currentQ();
   if(!q){ renderSessionEnd(app); return; }
 
+  // shuffle option order once per question so you can't memorise a position
+  if(q.type==='quiz' && state.orderFor !== state.index){
+    state.order = shuffle(q.opts.map((_,i)=>i));
+    state.orderFor = state.index;
+  }
+
   const subj = subjectOf(q);
   const tagClass = subj==='math' ? 'math' : 'sci';
   const isReview = state.mode==='review';
@@ -587,13 +596,13 @@ function renderQuestion(app){
   let inner = `<div class="qtext">${q.q}</div>`;
 
   if(q.type==='quiz'){
-    inner += `<div class="options">` + q.opts.map((o,i)=>{
+    inner += `<div class="options">` + state.order.map((oi)=>{
       let cls = 'opt';
       if(state.answered){
-        if(i===q.correct) cls += ' correct';
-        else if(i===state.chosen) cls += ' wrong';
+        if(oi===q.correct) cls += ' correct';
+        else if(oi===state.chosen) cls += ' wrong';
       }
-      return `<button class="${cls}" data-i="${i}" ${state.answered?'disabled':''}>${o}</button>`;
+      return `<button class="${cls}" data-i="${oi}" ${state.answered?'disabled':''}>${q.opts[oi]}</button>`;
     }).join('') + `</div>`;
     if(state.answered){
       inner += `<div class="feedback">${q.explain}</div>`;
@@ -761,10 +770,8 @@ document.addEventListener('keydown', (e)=>{
   // answer a quiz with number keys
   if(q.type==='quiz' && !state.answered && /^[1-9]$/.test(e.key)){
     const i = parseInt(e.key)-1;
-    if(i < q.opts.length){
-      const btn=document.querySelector('.opt[data-i="'+i+'"]');
-      if(btn){ btn.click(); e.preventDefault(); }
-    }
+    const btns = document.querySelectorAll('.opt');   // select by displayed position
+    if(i < btns.length){ btns[i].click(); e.preventDefault(); }
     return;
   }
   // advance (don't hijack Enter when a button is focused — let it click that)
