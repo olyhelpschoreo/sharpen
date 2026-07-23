@@ -135,6 +135,28 @@
   .section-label{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:12px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:0.06em;margin:18px 0 4px;}
   .section-label:first-child{margin-top:0;}
 
+  .goal-strip{background:var(--surface);border:1.5px solid var(--line);border-radius:var(--radius-md);padding:13px 16px;margin-bottom:14px;box-shadow:var(--shadow);}
+  .goal-strip.done{border-color:var(--good);}
+  .goal-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;color:var(--ink-soft);margin-bottom:9px;font-variant-numeric:tabular-nums;}
+  .goal-strip.done .goal-head{color:var(--good);}
+  .goal-bar{height:8px;background:var(--surface-sunken);border-radius:99px;overflow:hidden;}
+  .goal-fill{height:100%;background:var(--math);border-radius:99px;transition:width .3s ease;}
+  .goal-strip.done .goal-fill{background:var(--good);}
+
+  .home-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+  .home-actions .best-btn{margin-top:0;font-size:13px;padding:12px 8px;}
+
+  .badge-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
+  .badge-card{background:var(--surface);border:1.5px solid var(--line);border-radius:var(--radius-md);padding:16px 12px;text-align:center;box-shadow:var(--shadow);}
+  .badge-card.locked{opacity:.5;}
+  .badge-card.earned{border-color:var(--math);}
+  .badge-icon{font-size:30px;line-height:1;margin-bottom:8px;}
+  .badge-name{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;margin-bottom:3px;}
+  .badge-desc{font-size:12px;color:var(--ink-faint);line-height:1.4;}
+
+  .toast{position:fixed;left:50%;transform:translateX(-50%) translateY(16px);background:var(--ink);color:var(--on-ink);padding:12px 20px;border-radius:999px;font-family:'Inter',sans-serif;font-size:14px;font-weight:600;box-shadow:0 8px 28px rgba(0,0,0,0.28);opacity:0;transition:opacity .25s ease, transform .25s ease;z-index:1000;white-space:nowrap;pointer-events:none;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
   .home-hint{font-size:13px;color:var(--ink-faint);text-align:center;margin-top:16px;line-height:1.5;}
   .home-hint a{color:var(--ink-soft);cursor:pointer;text-decoration:underline;text-underline-offset:2px;}
 
@@ -360,6 +382,7 @@ const bank = {
 };
 
 const STORE_KEY = 'sharpen.v1';
+const DAILY_GOAL = 10;   // questions per day
 
 let state = {
   subject: null,
@@ -383,7 +406,9 @@ let state = {
   scores: { math:{correct:0,attempted:0}, science:{correct:0,attempted:0} },
   wrong: {},          // { [questionId]: true } — questions to review
   streak: { count:0, lastDay:null },
-  bestTimes: {}       // { [topic]: { t:seconds, subj:'math'|'science' } } — fastest correct answer
+  bestTimes: {},      // { [topic]: { t:seconds, subj:'math'|'science' } } — fastest correct answer
+  daily: { day:null, count:0 },   // questions answered today
+  goalsHit: 0         // number of days the daily goal was met
 };
 
 /* ---------- theme ---------- */
@@ -424,12 +449,15 @@ function load(){
     if(saved.wrong) state.wrong = saved.wrong;
     if(saved.streak) state.streak = saved.streak;
     if(saved.bestTimes) state.bestTimes = saved.bestTimes;
+    if(saved.daily) state.daily = saved.daily;
+    if(typeof saved.goalsHit === 'number') state.goalsHit = saved.goalsHit;
   }catch(e){ /* corrupt or blocked storage — start fresh */ }
 }
 function save(){
   try{
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      scores: state.scores, wrong: state.wrong, streak: state.streak, bestTimes: state.bestTimes
+      scores: state.scores, wrong: state.wrong, streak: state.streak, bestTimes: state.bestTimes,
+      daily: state.daily, goalsHit: state.goalsHit
     }));
   }catch(e){ /* storage full or blocked — app still works this session */ }
 }
@@ -450,7 +478,39 @@ function recordResult(subj, qid, wasCorrect){
     state.wrong[qid] = true;                         // add to review set
   }
   touchStreak();
+  bumpDaily();
   save();
+}
+function bumpDaily(){
+  const t = todayKey();
+  if(state.daily.day !== t) state.daily = { day:t, count:0 };
+  state.daily.count++;
+  if(state.daily.count === DAILY_GOAL) state.goalsHit = (state.goalsHit||0) + 1;
+}
+function dailyCount(){
+  return state.daily.day === todayKey() ? state.daily.count : 0;
+}
+function totalAnswered(){ return state.scores.math.attempted + state.scores.science.attempted; }
+function totalCorrect(){ return state.scores.math.correct + state.scores.science.correct; }
+
+const BADGES = [
+  {id:'first',  icon:'🌱', name:'First step',      desc:'Answer your first question', earned:()=>totalAnswered()>=1},
+  {id:'ten',    icon:'🔟', name:'Getting started',  desc:'Answer 10 questions',        earned:()=>totalAnswered()>=10},
+  {id:'fifty',  icon:'📚', name:'Bookworm',         desc:'Answer 50 questions',        earned:()=>totalAnswered()>=50},
+  {id:'hundred',icon:'💯', name:'Century',          desc:'Answer 100 questions',       earned:()=>totalAnswered()>=100},
+  {id:'sharp',  icon:'🎯', name:'Sharpshooter',     desc:'Get 50 correct answers',     earned:()=>totalCorrect()>=50},
+  {id:'fast',   icon:'💨', name:'Speed demon',      desc:'Answer a question under 3s', earned:()=>Object.values(state.bestTimes).some(b=>b.t<3)},
+  {id:'explore',icon:'🗺️', name:'Explorer',         desc:'Best time in 10 topics',     earned:()=>Object.keys(state.bestTimes).length>=10},
+  {id:'streak3',icon:'🔥', name:'On a roll',        desc:'Reach a 3-day streak',       earned:()=>state.streak.count>=3},
+  {id:'streak7',icon:'⚡', name:'Week warrior',     desc:'Reach a 7-day streak',       earned:()=>state.streak.count>=7},
+  {id:'streak30',icon:'👑',name:'Unstoppable',      desc:'Reach a 30-day streak',      earned:()=>state.streak.count>=30},
+  {id:'goal',   icon:'✅', name:'Goal getter',      desc:'Hit your daily goal',        earned:()=>state.goalsHit>=1},
+  {id:'goal7',  icon:'🏅', name:'Committed',        desc:'Hit your daily goal 7 times',earned:()=>state.goalsHit>=7}
+];
+function earnedSet(){
+  const s = new Set();
+  BADGES.forEach(b=>{ if(b.earned()) s.add(b.id); });
+  return s;
 }
 function recordBest(topic, subj, secs){
   // only correct answers set a best time; keep the fastest per topic
@@ -494,6 +554,27 @@ function ring(p, color){
 /* ---------- render ---------- */
 function fmtTime(ms){ return (ms/1000).toFixed(1) + 's'; }
 
+function showToast(msg){
+  const stacked = document.querySelectorAll('.toast').length;
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  t.style.bottom = (24 + stacked*54) + 'px';
+  document.body.appendChild(t);
+  requestAnimationFrame(()=> t.classList.add('show'));
+  setTimeout(()=>{ t.classList.remove('show'); setTimeout(()=> t.remove(), 300); }, 2800);
+}
+// call AFTER the answer's stats are recorded, passing the badge set captured BEFORE
+function notifyProgress(beforeBadges){
+  if(dailyCount() === DAILY_GOAL) showToast('🎯 Daily goal complete! Nice.');
+  earnedSet().forEach(id=>{
+    if(!beforeBadges.has(id)){
+      const b = BADGES.find(x=>x.id===id);
+      if(b) showToast(`🏅 Badge unlocked — ${b.name}`);
+    }
+  });
+}
+
 function render(){
   clearInterval(state.timerId);   // stop any live timer; renderQuestion restarts it if needed
   const app = document.getElementById('app');
@@ -501,6 +582,8 @@ function render(){
     renderLeaderboard(app);
   } else if(state.mode === 'topics'){
     renderTopics(app);
+  } else if(state.mode === 'badges'){
+    renderBadges(app);
   } else if(!state.mode){
     renderHome(app);
   } else {
@@ -559,14 +642,22 @@ function renderHome(app){
         </div>
       </div>
     </div>
+    ${(()=>{ const c = dailyCount(), done = c >= DAILY_GOAL, w = Math.min(100, Math.round(c/DAILY_GOAL*100));
+      return `<div class="goal-strip ${done?'done':''}">
+        <div class="goal-head"><span>${done ? '✅ Daily goal complete' : "Today's goal"}</span><span>${c} / ${DAILY_GOAL}</span></div>
+        <div class="goal-bar"><div class="goal-fill" style="width:${w}%"></div></div>
+      </div>`; })()}
     <div class="mode-row">
       <button class="mode-btn ${!state.subject?'emphasis':''}" id="pick-mixed">Mixed</button>
       <button class="mode-btn" id="start-quiz">Quiz mode</button>
       <button class="mode-btn" id="start-practice">Practice mode</button>
     </div>
     ${reviewCount>0 ? `<button class="review-btn" id="start-review">↻ Review my mistakes · ${reviewCount} question${reviewCount>1?'s':''}</button>` : ''}
-    <button class="best-btn" id="drill-topic">📚 Practice one topic</button>
-    <button class="best-btn" id="best-times">🏆 Best times per topic${Object.keys(state.bestTimes).length ? ` · ${Object.keys(state.bestTimes).length}` : ''}</button>
+    <div class="home-actions">
+      <button class="best-btn" id="drill-topic">📚 Topics</button>
+      <button class="best-btn" id="best-times">🏆 Best times</button>
+      <button class="best-btn" id="badges-btn">🎖️ Badges</button>
+    </div>
     <div class="home-hint">
       Select a subject above (or leave on Mixed), then choose quiz or practice.
       <span class="kbd-tip"><br>Tip: press <kbd>1</kbd>–<kbd>4</kbd> to answer, <kbd>→</kbd> for next.</span><br>
@@ -583,12 +674,15 @@ function renderHome(app){
   if(rev) rev.onclick = ()=> startReview();
   document.getElementById('best-times').onclick = ()=>{ state.mode = 'leaderboard'; render(); };
   document.getElementById('drill-topic').onclick = ()=>{ state.mode = 'topics'; render(); };
+  document.getElementById('badges-btn').onclick = ()=>{ state.mode = 'badges'; render(); };
   document.getElementById('reset-link').onclick = ()=>{
-    if(confirm('Reset all scores, streak, saved mistakes, and best times? This cannot be undone.')){
+    if(confirm('Reset all scores, streak, mistakes, best times, badges, and goals? This cannot be undone.')){
       state.scores = { math:{correct:0,attempted:0}, science:{correct:0,attempted:0} };
       state.wrong = {};
       state.streak = { count:0, lastDay:null };
       state.bestTimes = {};
+      state.daily = { day:null, count:0 };
+      state.goalsHit = 0;
       save();
       render();
     }
@@ -692,6 +786,35 @@ function startTopic(topic){
   const pool = bank.math.concat(bank.science).filter(q=>q.topic===topic);
   if(!pool.length) return;
   beginQueue(shuffle(pool), 'topic');
+}
+
+function renderBadges(app){
+  const earned = earnedSet();
+  const cards = BADGES.map(b=>{
+    const has = earned.has(b.id);
+    return `<div class="badge-card ${has?'earned':'locked'}">
+        <div class="badge-icon">${has ? b.icon : '🔒'}</div>
+        <div class="badge-name">${b.name}</div>
+        <div class="badge-desc">${b.desc}</div>
+      </div>`;
+  }).join('');
+  app.innerHTML = `
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div>
+          <div class="brand-name">Sharpen</div>
+          <div class="brand-tag">🎖️ Badges · ${earned.size}/${BADGES.length}</div>
+        </div>
+      </div>
+    </div>
+    <div class="badge-grid">${cards}</div>
+    <div class="footer-nav" style="margin-top:20px;">
+      <span class="back" id="bd-back">← Dashboard</span>
+      <span class="progress-label">${earned.size} of ${BADGES.length} earned</span>
+    </div>
+  `;
+  document.getElementById('bd-back').onclick = ()=>{ state.mode = null; render(); };
 }
 
 function startSession(mode){
@@ -831,12 +954,14 @@ function renderQuestion(app){
       document.querySelectorAll('.opt').forEach(btn=>{
         btn.onclick = ()=>{
           if(state.answered) return;
+          const before = earnedSet();
           const i = parseInt(btn.dataset.i);
           state.answered = true;
           state.chosen = i;
           stopTimer();
           if(i===q.correct) recordBest(q.topic, subj, state.qElapsed/1000);
           recordResult(subj, q.id, i===q.correct);
+          notifyProgress(before);
           render();   // re-render: colours the options + shows explanation + enables Next
         };
       });
@@ -850,17 +975,21 @@ function renderQuestion(app){
     };
     const right = document.getElementById('mark-right');
     if(right) right.onclick = ()=>{
+      const before = earnedSet();
       state.selfMarked = true; state.lastMarkRight = true;
       stopTimer();
       recordBest(q.topic, subj, state.qElapsed/1000);
       recordResult(subj, q.id, true);
+      notifyProgress(before);
       render();
     };
     const wrong = document.getElementById('mark-wrong');
     if(wrong) wrong.onclick = ()=>{
+      const before = earnedSet();
       state.selfMarked = true; state.lastMarkRight = false;
       stopTimer();
       recordResult(subj, q.id, false);
+      notifyProgress(before);
       render();
     };
   }
