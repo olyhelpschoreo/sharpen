@@ -430,6 +430,52 @@ function toggleTheme(){
   render();   // refresh the toggle icon
 }
 
+/* ---------- sound ---------- */
+let audioCtx = null;
+function getCtx(){
+  if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ audioCtx = null; } }
+  if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
+  return audioCtx;
+}
+function soundOn(){ try{ return localStorage.getItem('sharpen.sound') !== 'off'; }catch(e){ return true; } }
+function toggleSound(){
+  const next = soundOn() ? 'off' : 'on';
+  try{ localStorage.setItem('sharpen.sound', next); }catch(e){}
+  if(next==='on') playCorrect();   // little confirmation blip
+  render();
+}
+function tone(ctx, freq, start, dur, type, vol){
+  const osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = type; osc.frequency.value = freq;
+  osc.connect(g); g.connect(ctx.destination);
+  const t = ctx.currentTime + start;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(vol, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  osc.start(t); osc.stop(t + dur + 0.02);
+}
+function playCorrect(){
+  if(!soundOn()) return;
+  const ctx = getCtx(); if(!ctx) return;
+  tone(ctx, 523.25, 0,    0.13, 'sine', 0.16);  // C5
+  tone(ctx, 659.25, 0.08, 0.13, 'sine', 0.16);  // E5
+  tone(ctx, 783.99, 0.16, 0.20, 'sine', 0.16);  // G5 — bright rising arpeggio
+}
+function playWrong(){
+  if(!soundOn()) return;
+  const ctx = getCtx(); if(!ctx) return;
+  const osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = 'square';
+  const t = ctx.currentTime;
+  osc.frequency.setValueAtTime(196, t);                       // low, descending buzz
+  osc.frequency.exponentialRampToValueAtTime(120, t + 0.22);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(0.12, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start(t); osc.stop(t + 0.32);
+}
+
 /* ---------- persistence ---------- */
 function todayKey(){
   const d = new Date();
@@ -612,6 +658,7 @@ function renderHome(app){
         <div class="streak-chip ${streakActive?'':'cold'}">
           <span class="flame">${streakActive?'🔥':'❄️'}</span>${streakLabel}
         </div>
+        <button class="theme-toggle" id="sound-toggle" aria-label="Toggle sound" title="Toggle sound">${soundOn()?'🔊':'🔇'}</button>
         <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">${effectiveTheme()==='dark'?'☀️':'🌙'}</button>
       </div>
     </div>
@@ -670,6 +717,7 @@ function renderHome(app){
   document.getElementById('start-quiz').onclick = ()=> startSession('quiz');
   document.getElementById('start-practice').onclick = ()=> startSession('practice');
   document.getElementById('theme-toggle').onclick = toggleTheme;
+  document.getElementById('sound-toggle').onclick = toggleSound;
   const rev = document.getElementById('start-review');
   if(rev) rev.onclick = ()=> startReview();
   document.getElementById('best-times').onclick = ()=>{ state.mode = 'leaderboard'; render(); };
@@ -959,7 +1007,8 @@ function renderQuestion(app){
           state.answered = true;
           state.chosen = i;
           stopTimer();
-          if(i===q.correct) recordBest(q.topic, subj, state.qElapsed/1000);
+          if(i===q.correct){ playCorrect(); recordBest(q.topic, subj, state.qElapsed/1000); }
+          else playWrong();
           recordResult(subj, q.id, i===q.correct);
           notifyProgress(before);
           render();   // re-render: colours the options + shows explanation + enables Next
@@ -978,6 +1027,7 @@ function renderQuestion(app){
       const before = earnedSet();
       state.selfMarked = true; state.lastMarkRight = true;
       stopTimer();
+      playCorrect();
       recordBest(q.topic, subj, state.qElapsed/1000);
       recordResult(subj, q.id, true);
       notifyProgress(before);
@@ -988,6 +1038,7 @@ function renderQuestion(app){
       const before = earnedSet();
       state.selfMarked = true; state.lastMarkRight = false;
       stopTimer();
+      playWrong();
       recordResult(subj, q.id, false);
       notifyProgress(before);
       render();
